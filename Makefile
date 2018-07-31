@@ -1,5 +1,3 @@
-CC=clang
-
 all: compile
 
 compile: main.c
