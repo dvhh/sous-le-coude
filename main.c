@@ -109,6 +109,7 @@ void handleClient(const int serverSocket) {
 	fprintf( out, path);
 	fprintf( out, "\r\n");
 	fprintf( out, proto);
+	
 	//fprintf( out, "\r\n");
 	exit( EXIT_SUCCESS );
 }
