@@ -8,31 +8,41 @@
 #include <string.h>
 #include <signal.h>
 #include <limits.h>
+#include <fnmatch.h>
 
-void serveTest( char* verb, char* path, char* extra,int flag, FILE* input,FILE* output) {
+void serveTest( const char* verb, const char* path, const char* extra, const int flag, FILE* input,FILE* output) {
 	
 }
 
-void serveStatic( char* verb, char* path, char* extra,int flag, FILE* inpout, FILE* output) {
+void serveStatic( const char* verb, const char* path, const char* extra, const int flag, FILE* inpout, FILE* output) {
 
 }
 
-struct httpError {
+struct HttpError {
 	int code;
 	char* message;
 };
 
 #include "httpErrors.h"
 
-void serveError( char* verb, char* path, char* extra,int flag, FILE* inpout, FILE* output) {
-	
+int cmpHttpError( const void *a, const void *b ) {
+	const struct HttpError *pa = (struct HttpError*)a;
+	const struct HttpError *pb = (struct HttpError*)b;
+	return pa->code - pb->code;
+}
+
+void serveError( const char* verb, const char* path, const char* extra, const int flag, FILE* inpout, FILE* output) {
+	const struct HttpError key={flag,NULL};
+	const struct HttpError *entry = bsearch( &key, httpErrors, sizeof( httpErrors ) / sizeof( struct HttpError ), sizeof( struct HttpError ), cmpHttpError );
+	fprintf( output, "HTTP/1.1 %s\r\n", entry->message );
+	fprintf( output, "\r\n");
 }
 
 struct Route {
 	char* verb;
 	char* path;
 	char* extra;
-	void (*handler)(char*,char*,char*,int,FILE*,FILE*);
+	void (*handler)(const char*,const char*,const char*,const int,FILE*,FILE*);
 };
 
 #include "route.h"
@@ -48,27 +58,59 @@ void handleClient(const int serverSocket) {
 		perror(NULL);
 		exit( EXIT_FAILURE );
 	}
+	const pid_t pid = fork();
+	if( pid == -1 ) {
+		perror(NULL);
+		exit( EXIT_FAILURE );
+	}
+	if( pid > 0 ) {
+		close(client);
+		return;
+	}
 	FILE *out = fdopen(client, "w");
 	FILE *in  = fdopen(client, "r");
 	// read first line
-	
-	fprintf(out, "HTTP/1.1 200 OK\r\n");
-	fprintf(out, "Content-Type: text/plain\r\n");
-	fprintf(out, "\r\n");
 
 	char line[LINE_MAX];
 	if( fgets( line, LINE_MAX, in ) == NULL ) {
 		perror(NULL);
-		goto clientCleanup;
+		exit( EXIT_FAILURE );
 	}
 
 	const size_t length = strnlen( line, LINE_MAX );
 	if( line[length-1] != '\n' ) {
 		serveError(NULL,NULL,NULL,414,in,out);
+		exit( EXIT_FAILURE );
 	}
-clientCleanup:
-	fclose(out);
-	fclose(in);
+
+
+	fprintf( out, "HTTP/1.1 200 OK\r\n");
+	fprintf( out, "Content-Type: text/plain\r\n");
+	fprintf( out, "\r\n");
+	fprintf( out, line);
+	fprintf( out, "\r\n");
+
+	char* verb=line;
+	char* path=NULL;
+	char* proto=NULL;
+	for( int i=0; i<length; ++i ) {
+		if(line[i]==' ') {
+			line[i] = 0;
+			if(path==NULL) {
+				path=line + i + 1;
+			}else{
+				proto=line + i + 1;
+				break;
+			}
+		}
+	}
+	fprintf( out, verb);
+	fprintf( out, "\r\n");
+	fprintf( out, path);
+	fprintf( out, "\r\n");
+	fprintf( out, proto);
+	//fprintf( out, "\r\n");
+	exit( EXIT_SUCCESS );
 }
 
 void serve(const int port) {
@@ -91,7 +133,7 @@ void serve(const int port) {
 
 	if ( listen( serverSocket,32 ) == -1 ) {
 		perror( NULL );
-		exit( EXIT_FAILURE );		
+		exit( EXIT_FAILURE );
 	}
 	// service client connection
 	while(1) {
