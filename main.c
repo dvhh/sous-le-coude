@@ -14,6 +14,7 @@
 #include "serve/error.h"
 #include "serve/static.h"
 #include "serve/test.h"
+#include "serve/clientAddress.h"
 
 struct Route {
 	char* pattern;

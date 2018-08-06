@@ -17,7 +17,8 @@ static void getStatic( const char* contentType, const char* inputPath, FILE* inp
 		return serveError( NULL, NULL, inputPath, 404, input, output );
 	}
 
-	fprintf( output, "HTTP/1.1 200 OK\r\n");
+	//fprintf( output, "HTTP/1.1 200 OK\r\n");
+	printHead( 200, output );
 	fprintf( output, "Content-Type: %s\r\n", contentType);
 	fprintf( output, "Connection: close\r\n");
 
@@ -73,3 +74,4 @@ void serveStatic ( const char* verb, const char* path, const char* extra, const 
 
 	return serveError( verb, path, extra, 405, input, output );
 }
+

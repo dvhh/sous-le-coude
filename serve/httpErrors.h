@@ -1,6 +1,8 @@
 #pragma once
 
-const struct HttpError httpErrors[] = {
+static const struct HttpError httpErrors[] = {
+	{ 200, "200 OK" },
+	{ 400, "400 Bad Request"},
 	{ 404, "404 Not Found" },
 	{ 405, "405 Method Not Allowed" },
 	{ 414, "414 URI Too Long" },
