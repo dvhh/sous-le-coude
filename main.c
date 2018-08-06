@@ -5,131 +5,148 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <signal.h>
+#include <limits.h>
+#include <fnmatch.h>
 
-#define MAX_LINE_LENGTH (1024)
+#include "serve/error.h"
+#include "serve/static.h"
+#include "serve/test.h"
+#include "serve/clientAddress.h"
 
-void send_response(FILE *f, int address_found, char *ip_address) {
-  fprintf(f, "HTTP/1.1 200 OK\r\n");
-  fprintf(f, "Content-Type: application/json\r\n");
-  fprintf(f, "\r\n");
+struct Route {
+	char* pattern;
+	char* extra;
+	int flag;
+	void (*handler)(const char*,const char*,const char*,const int,FILE*,FILE*);
+};
 
-  if (!address_found) {
-    fprintf(f, "{\"address\": \"UNKNOWN\"}");
-  } else {
-    fprintf(f, "{\"address\": \"%s\"}", ip_address);
-  }
+#include "route.h"
+
+#ifndef LINE_MAX
+#define LINE_MAX 2048
+#endif
+
+void handleClient (const int serverSocket) {
+
+	struct sockaddr_in client_addr;
+	socklen_t clientaddr_len = sizeof ( client_addr );
+
+	const int client = accept( serverSocket, (struct sockaddr *)&client_addr, &clientaddr_len);
+
+	if( client == -1 ) {
+		perror(NULL);
+		exit( EXIT_FAILURE );
+	}
+
+	const pid_t pid = fork();
+	if( pid == -1 ) {
+		perror(NULL);
+		exit( EXIT_FAILURE );
+	}
+	if( pid > 0 ) {
+		close(client);
+		return;
+	}
+
+	FILE *out = fdopen(client, "w");
+	FILE *in  = fdopen(client, "r");
+	// read first line
+
+	char line[LINE_MAX];
+	if( fgets( line, LINE_MAX, in ) == NULL ) {
+		perror(NULL);
+		exit( EXIT_FAILURE );
+	}
+
+	const size_t length = strnlen( line, LINE_MAX );
+	if( line[length-1] != '\n' ) {
+		serveError(NULL,NULL,NULL,414,in,out);
+		exit( EXIT_FAILURE );
+	}
+
+	char* verb=line;
+	char* path=NULL;
+	char* proto=NULL;
+	for( unsigned int i=0; i<length; ++i ) {
+		if( line[i]==' ' ) {
+			line[i] = 0;
+			if( path == NULL ) {
+				path = line + i + 1;
+			}else{
+				proto = line + i + 1;
+				break;
+			}
+		}
+	}
+
+	// Too strict ?
+	if( strcmp( "HTTP/1.1\r\n",proto) != 0 ) {
+		serveError(NULL,NULL,NULL,505,in,out);
+	}
+
+	bool handled = false;
+	const unsigned int routeCount = sizeof( routes ) / sizeof( struct Route );
+	for( unsigned int i=0; i < routeCount; ++i ) {
+		if( fnmatch( routes[i].pattern, path, 0 ) == 0 ) {
+			handled = true;
+			fprintf(stderr, "route [%i] used [%s]\n", i, path);
+			routes[i].handler( verb, path, routes[i].extra, routes[i].flag, in, out);
+			break;
+		}
+	}
+
+	if(! handled ) {
+		fprintf(stderr, "[%s] not handled, serving a 404\n", path);
+		serveError(NULL,path,NULL,404,in,out);
+	}
+
+	fflush(out);
+	fclose(in);
+	fclose(out);
+	exit( EXIT_SUCCESS );
 }
 
-int extract_ip_address_from_header(char *line, char *address) {
-  int found = 0;
-  char *ptr;
-  char *name;
-  char *value;
+void serve (const int port) {
+	// open connection
+	const int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+	if ( serverSocket == -1 ) {
+		perror( NULL );
+		exit( EXIT_FAILURE );
+	}
 
-  name = strndup(line, MAX_LINE_LENGTH);
-  ptr = index(name, (int)':');
-  if (ptr == NULL) {
-    return 0;
-  }
-  // end the string at the colon
-  *ptr = '\0';
+	struct sockaddr_in addr_in;
+	addr_in.sin_family = AF_INET;
+	addr_in.sin_port = htons( port );
+	addr_in.sin_addr.s_addr = INADDR_ANY;
 
-  // get the value part of the header field
-  ptr = index(line, (int) ':');
-  value = strndup(ptr + 2, MAX_LINE_LENGTH);
+	if ( bind( serverSocket, ( struct sockaddr * ) &addr_in, sizeof( struct sockaddr_in ) ) == -1 ) {
+		perror( NULL );
+		exit( EXIT_FAILURE );
+	}
 
-  // most ugly way to remove \r\n from the end of the string
-  value[strlen(value)-2] = '\0';
-
-  if (strncmp(name, "X-Forwarded-For", MAX_LINE_LENGTH) == 0) {
-    found = 1;
-    strncpy(address, value, MAX_LINE_LENGTH);
-  }
-
-  free(name);
-  free(value);
-
-  return found;
+	if ( listen( serverSocket,32 ) == -1 ) {
+		perror( NULL );
+		exit( EXIT_FAILURE );
+	}
+	// service client connection
+	while(1) {
+		handleClient(serverSocket);
+	}
+	close(serverSocket);
 }
 
-int open_connection(int port) {
-  int sock;
-  struct sockaddr_in addr_in;
+int main (int argc, char **argv) {
 
-  sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (argc != 2) {
+		printf("%s [port-number]\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
 
-  if (sock == -1) {
-    printf("Failed to create socket (%d)\n", errno);
-    exit(EXIT_FAILURE);
-  }
+	const int port = atoi(argv[1]);
+	serve(port);
 
-  addr_in.sin_family = AF_INET;
-  addr_in.sin_port = htons(port);
-  addr_in.sin_addr.s_addr = INADDR_ANY;
-
-  bind(sock, (struct sockaddr *) &addr_in, sizeof(struct sockaddr_in));
-
-  if (listen(sock, 8) == -1) {
-    printf("Failed to get socket to listen (%d)\n", errno);
-    exit(EXIT_FAILURE);
-  }
-
-  return sock;
-}
-
-void accept_client(int sock) {
-  int address_found = 0;
-  struct sockaddr_in client_addr;
-  socklen_t clientaddr_len;
-  char header_line[MAX_LINE_LENGTH];
-  char *res;
-  FILE *f;
-  char ip_address[MAX_LINE_LENGTH];
-
-  int client_sock = accept(sock, (struct sockaddr *)&client_addr, &clientaddr_len);
-  if (client_sock == -1) {
-    printf("Failed to accept connection (%d)\n", errno);
-    exit(EXIT_FAILURE);
-  }
-
-  f = fdopen(client_sock, "w+");
-
-  do {
-    res = fgets(header_line, MAX_LINE_LENGTH, f);
-
-    if (res != NULL) {
-      printf("%s", res);
-      if (!address_found) {
-        address_found = extract_ip_address_from_header(res, ip_address);
-      }
-    }
-  } while (res != NULL && strcmp(header_line, "\r\n") != 0);
-
-  send_response(f, address_found, ip_address);
-
-  fclose(f);
-
-  // stdout needs to be flushed in order for heroku to read the logs
-  fflush(stdout);
-}
-
-int main(int argc, char **argv) {
-  int port;
-
-  if (argc != 2) {
-    printf("%s [port-number]\n", argv[0]);
-    exit(EXIT_FAILURE);
-  }
-
-  port = atoi(argv[1]);
-  int sock = open_connection(port);
-
-  while (1) {
-    accept_client(sock);
-  }
-
-  close(sock);
-  exit(EXIT_SUCCESS);
+	exit(EXIT_SUCCESS);
 }
