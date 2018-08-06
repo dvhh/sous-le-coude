@@ -5,49 +5,30 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <signal.h>
 #include <limits.h>
 #include <fnmatch.h>
 
-void serveTest( const char* verb, const char* path, const char* extra, const int flag, FILE* input,FILE* output) {
-	
-}
-
-void serveStatic( const char* verb, const char* path, const char* extra, const int flag, FILE* inpout, FILE* output) {
-
-}
-
-struct HttpError {
-	int code;
-	char* message;
-};
-
-#include "httpErrors.h"
-
-int cmpHttpError( const void *a, const void *b ) {
-	const struct HttpError *pa = (struct HttpError*)a;
-	const struct HttpError *pb = (struct HttpError*)b;
-	return pa->code - pb->code;
-}
-
-void serveError( const char* verb, const char* path, const char* extra, const int flag, FILE* inpout, FILE* output) {
-	const struct HttpError key={flag,NULL};
-	const struct HttpError *entry = bsearch( &key, httpErrors, sizeof( httpErrors ) / sizeof( struct HttpError ), sizeof( struct HttpError ), cmpHttpError );
-	fprintf( output, "HTTP/1.1 %s\r\n", entry->message );
-	fprintf( output, "\r\n");
-}
+#include "serve/error.h"
+#include "serve/static.h"
+#include "serve/test.h"
 
 struct Route {
-	char* verb;
-	char* path;
+	char* pattern;
 	char* extra;
+	int flag;
 	void (*handler)(const char*,const char*,const char*,const int,FILE*,FILE*);
 };
 
 #include "route.h"
 
-void handleClient(const int serverSocket) {
+#ifndef LINE_MAX
+#define LINE_MAX 2048
+#endif
+
+void handleClient (const int serverSocket) {
 
 	struct sockaddr_in client_addr;
 	socklen_t clientaddr_len = sizeof ( client_addr );
@@ -58,6 +39,7 @@ void handleClient(const int serverSocket) {
 		perror(NULL);
 		exit( EXIT_FAILURE );
 	}
+
 	const pid_t pid = fork();
 	if( pid == -1 ) {
 		perror(NULL);
@@ -67,6 +49,7 @@ void handleClient(const int serverSocket) {
 		close(client);
 		return;
 	}
+
 	FILE *out = fdopen(client, "w");
 	FILE *in  = fdopen(client, "r");
 	// read first line
@@ -83,38 +66,49 @@ void handleClient(const int serverSocket) {
 		exit( EXIT_FAILURE );
 	}
 
-
-	fprintf( out, "HTTP/1.1 200 OK\r\n");
-	fprintf( out, "Content-Type: text/plain\r\n");
-	fprintf( out, "\r\n");
-	fprintf( out, line);
-	fprintf( out, "\r\n");
-
 	char* verb=line;
 	char* path=NULL;
 	char* proto=NULL;
-	for( int i=0; i<length; ++i ) {
-		if(line[i]==' ') {
+	for( unsigned int i=0; i<length; ++i ) {
+		if( line[i]==' ' ) {
 			line[i] = 0;
-			if(path==NULL) {
-				path=line + i + 1;
+			if( path == NULL ) {
+				path = line + i + 1;
 			}else{
-				proto=line + i + 1;
+				proto = line + i + 1;
 				break;
 			}
 		}
 	}
-	fprintf( out, verb);
-	fprintf( out, "\r\n");
-	fprintf( out, path);
-	fprintf( out, "\r\n");
-	fprintf( out, proto);
-	
-	//fprintf( out, "\r\n");
+
+	// Too strict ?
+	if( strcmp( "HTTP/1.1\r\n",proto) != 0 ) {
+		serveError(NULL,NULL,NULL,505,in,out);
+	}
+
+	bool handled = false;
+	const unsigned int routeCount = sizeof( routes ) / sizeof( struct Route );
+	for( unsigned int i=0; i < routeCount; ++i ) {
+		if( fnmatch( routes[i].pattern, path, 0 ) == 0 ) {
+			handled = true;
+			fprintf(stderr, "route [%i] used [%s]\n", i, path);
+			routes[i].handler( verb, path, routes[i].extra, routes[i].flag, in, out);
+			break;
+		}
+	}
+
+	if(! handled ) {
+		fprintf(stderr, "[%s] not handled, serving a 404\n", path);
+		serveError(NULL,path,NULL,404,in,out);
+	}
+
+	fflush(out);
+	fclose(in);
+	fclose(out);
 	exit( EXIT_SUCCESS );
 }
 
-void serve(const int port) {
+void serve (const int port) {
 	// open connection
 	const int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 	if ( serverSocket == -1 ) {
@@ -143,7 +137,7 @@ void serve(const int port) {
 	close(serverSocket);
 }
 
-int main(int argc, char **argv) {
+int main (int argc, char **argv) {
 
 	if (argc != 2) {
 		printf("%s [port-number]\n", argv[0]);
