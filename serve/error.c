@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "error.h"
+
 struct HttpError {
 	int code;
 	char* message;
@@ -8,10 +10,10 @@ struct HttpError {
 
 #include "httpErrors.h"
 
-static int cmpHttpError ( const void *a, const void *b ) {
-	const int *pa = a;
-	const struct HttpError *pb = (struct HttpError*)b;
-	return (*pa) - pb->code;
+static int cmpHttpError ( const void *pKey, const void *pData ) {
+	const int *key = pKey;
+	const struct HttpError *data = (struct HttpError*)pData;
+	return (*key) - data->code;
 }
 
 void printHead( const int code, FILE* output ) {

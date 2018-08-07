@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 #include <signal.h>
@@ -29,35 +30,15 @@ struct Route {
 #define LINE_MAX 2048
 #endif
 
-void handleClient (const int serverSocket) {
+void handleClient (const int clientFd) {
 
-	struct sockaddr_in client_addr;
-	socklen_t clientaddr_len = sizeof ( client_addr );
-
-	const int client = accept( serverSocket, (struct sockaddr *)&client_addr, &clientaddr_len);
-
-	if( client == -1 ) {
-		perror(NULL);
-		exit( EXIT_FAILURE );
-	}
-
-	const pid_t pid = fork();
-	if( pid == -1 ) {
-		perror(NULL);
-		exit( EXIT_FAILURE );
-	}
-	if( pid > 0 ) {
-		close(client);
-		return;
-	}
-
-	FILE *out = fdopen(client, "w");
-	FILE *in  = fdopen(client, "r");
+	FILE *out = fdopen(clientFd, "w");
+	FILE *in  = fdopen(clientFd, "r");
 	// read first line
 
 	char line[LINE_MAX];
 	if( fgets( line, LINE_MAX, in ) == NULL ) {
-		perror(NULL);
+		perror("fgets");
 		exit( EXIT_FAILURE );
 	}
 
@@ -109,6 +90,45 @@ void handleClient (const int serverSocket) {
 	exit( EXIT_SUCCESS );
 }
 
+void acceptClient (const int serverSocket) {
+	struct sockaddr_in client_addr;
+	socklen_t clientaddr_len = sizeof ( client_addr );
+
+	const int client = accept( serverSocket, (struct sockaddr *)&client_addr, &clientaddr_len);
+
+	if( client == -1 ) {
+		perror(NULL);
+		exit( EXIT_FAILURE );
+	}
+
+	union {
+		unsigned long int l;
+		struct {
+			unsigned char b1;
+			unsigned char b2;
+			unsigned char b3;
+			unsigned char b4;
+		} b;
+	} address;
+
+	address.l = ntohl( client_addr.sin_addr.s_addr );
+
+	fprintf(stderr, "client %d.%d.%d.%d\n", address.b.b4, address.b.b3, address.b.b2, address.b.b1 );
+
+	const pid_t pid = fork();
+	printf("%jd\n", (intmax_t) pid);
+
+	if( pid == -1 ) {
+		perror("pid");
+		exit( EXIT_FAILURE );
+	}
+	if( pid > 0 ) {
+		close(client);
+		return;
+	}
+	return handleClient(client);
+}
+
 void serve (const int port) {
 	// open connection
 	const int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -132,8 +152,9 @@ void serve (const int port) {
 		exit( EXIT_FAILURE );
 	}
 	// service client connection
+	fputs( "ready\n", stderr );
 	while(1) {
-		handleClient(serverSocket);
+		acceptClient(serverSocket);
 	}
 	close(serverSocket);
 }
