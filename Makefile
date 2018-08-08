@@ -8,7 +8,7 @@ compile: $(TARGET)
 
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $^
+	$(CC) $(CFLAGS) -o $(TARGET) $^ -lcrypt
 	strip $(TARGET)
 
 clean:

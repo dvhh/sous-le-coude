@@ -1,45 +1,77 @@
+#define _XOPEN_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "static.h"
 #include "error.h"
 
+static char* readFileToBuffer(const char* inputPath, const off_t size) {
+	FILE* inputFile = fopen( inputPath, "r" );
+
+	if( inputFile == NULL ) {
+		perror( inputPath );
+		return NULL;
+	}
+
+	char *buffer =malloc( size );
+	if( buffer == NULL ) { return NULL; }
+	if( fread( buffer, size, 1, inputFile ) != 1 ) {
+		free(buffer);
+		perror( inputPath );
+		return NULL;
+	}
+	fclose(inputFile);
+
+	return buffer;
+}
+
+static char* getRFC2822Time(char* output,const size_t max, const time_t t) {
+	//const time_t t = time(NULL);
+	if ( strftime( output, max, "%a, %d %b %Y %T %z", localtime( &t ) ) == 0 ) {
+		return NULL;
+	}
+	return output;
+}
+
 static void getStatic( const char* contentType, const char* inputPath, FILE* input, FILE* output ) {
 	fprintf(stderr, "getStatic [%s] [%s]\n", contentType, inputPath);
 
-	FILE* inputFile = fopen( inputPath, "r" );
-	if( inputFile == NULL ) {
+	struct stat statInput;
+	if( stat( inputPath, &statInput ) != 0 ) {
 		perror( inputPath );
+		return serveError( NULL, NULL, inputPath, 500, input, output );
+	}
+
+	char* buffer = readFileToBuffer( inputPath, statInput.st_size );
+	if( buffer == NULL ) {
 		return serveError( NULL, NULL, inputPath, 404, input, output );
 	}
 
-	//fprintf( output, "HTTP/1.1 200 OK\r\n");
 	printHead( 200, output );
-	fprintf( output, "Content-Type: %s\r\n", contentType);
-	fprintf( output, "Connection: close\r\n");
+	fprintf( output, "Content-Type: %s\r\n", contentType );
+	fprintf( output, "Allow: GET, HEAD\r\n" );
+	fprintf( output, "Cache-Control: max-age=3600\r\n" );
+	fprintf( output, "Content-Length: %ld\r\n", statInput.st_size );
+	char timeBuffer[1024];
+	if( getRFC2822Time(timeBuffer, 1024, time(NULL) ) == NULL ) { return serveError( NULL, NULL, "time", 500, input, output ); }
+	fprintf( output, "Date: %s\r\n", timeBuffer );
+	fprintf( output, "Connection: close\r\n" );
+	if( getRFC2822Time(timeBuffer, 1024, statInput.st_mtime ) == NULL ) { return serveError( NULL, NULL, "time", 500, input, output ); }
+	fprintf( output, "Last-Modified: %s\r\n", timeBuffer );
 
 	fprintf( output, "\r\n");
 
-	uint8_t *buffer = malloc(8192*sizeof(uint8_t));
-
-	while( 1 ) {
-		const size_t readCount  = fread( buffer, sizeof(uint8_t), 8192, inputFile );
-		const size_t wroteCount = fwrite( buffer, sizeof(uint8_t), readCount, output );
-		if( readCount != wroteCount ) {
-			fprintf(stderr, "r:%zu w:%zu\n", readCount, wroteCount);
-			perror(NULL);
-			return;
-		}
-		if( readCount != 8192 ) {
-			break;
-		}
+	if( fwrite(buffer, statInput.st_size, 1, output ) != 1 ) {
+		perror(NULL);
+		return;
 	}
 
-	fclose( inputFile );
 	free(buffer);
 }
 
