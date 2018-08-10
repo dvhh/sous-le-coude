@@ -6,31 +6,21 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdbool.h>
 #include <string.h>
 #include <signal.h>
 #include <limits.h>
-#include <fnmatch.h>
 
+#include "router.h"
 #include "serve/error.h"
 #include "serve/static.h"
 #include "serve/test.h"
 #include "serve/clientAddress.h"
 
-struct Route {
-	char* pattern;
-	char* extra;
-	int flag;
-	void (*handler)(const char*,const char*,const char*,const int,FILE*,FILE*);
-};
-
-#include "route.h"
-
 #ifndef LINE_MAX
 #define LINE_MAX 2048
 #endif
 
-void handleClient (const int clientFd) {
+void handleClient ( const int clientFd, const struct Route routes[], const unsigned int routesCount ) {
 
 	FILE *out = fdopen(clientFd, "w");
 	FILE *in  = fdopen(clientFd, "r");
@@ -68,18 +58,11 @@ void handleClient (const int clientFd) {
 		serveError(NULL,NULL,NULL,505,in,out);
 	}
 
-	bool handled = false;
-	const unsigned int routeCount = sizeof( routes ) / sizeof( struct Route );
-	for( unsigned int i=0; i < routeCount; ++i ) {
-		if( fnmatch( routes[i].pattern, path, 0 ) == 0 ) {
-			handled = true;
-			fprintf(stderr, "route [%i] used [%s]\n", i, path);
-			routes[i].handler( verb, path, routes[i].extra, routes[i].flag, in, out);
-			break;
-		}
-	}
+	const struct Route *route = getRoute( path, routes, routesCount );
 
-	if(! handled ) {
+	if( route != NULL ) {
+		route->handler( verb, path, route->extra, route->flag, in, out);
+	} else {
 		fprintf(stderr, "[%s] not handled, serving a 404\n", path);
 		serveError(NULL,path,NULL,404,in,out);
 	}
@@ -90,7 +73,7 @@ void handleClient (const int clientFd) {
 	exit( EXIT_SUCCESS );
 }
 
-void acceptClient (const int serverSocket) {
+void acceptClient ( const int serverSocket , const struct Route routes[], const unsigned int routeCount ) {
 	struct sockaddr_in client_addr;
 	socklen_t clientaddr_len = sizeof ( client_addr );
 
@@ -123,14 +106,14 @@ void acceptClient (const int serverSocket) {
 		exit( EXIT_FAILURE );
 	}
 	if( pid > 0 ) {
-		close(client);
+		close( client );
 		return;
 	}
-	return handleClient(client);
+	return handleClient( client, routes, routeCount );
 }
 
-void serve (const int port) {
-	// open connection
+void serve ( const int port, const struct Route routes[], const unsigned int routeCount ) {
+
 	const int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 	if ( serverSocket == -1 ) {
 		perror( NULL );
@@ -154,10 +137,13 @@ void serve (const int port) {
 	// service client connection
 	fputs( "ready\n", stderr );
 	while(1) {
-		acceptClient(serverSocket);
+		acceptClient( serverSocket, routes, routeCount );
 	}
-	close(serverSocket);
+	close( serverSocket );
 }
+
+
+#include "route.h"
 
 int main (int argc, char **argv) {
 
@@ -166,8 +152,10 @@ int main (int argc, char **argv) {
 		exit(EXIT_FAILURE);
 	}
 
-	const int port = atoi(argv[1]);
-	serve(port);
+	const int port = atoi( argv[1] );
+
+	const unsigned int routeCount = sizeof( routes ) / sizeof( struct Route );
+	serve( port, routes, routeCount );
 
 	exit(EXIT_SUCCESS);
 }
